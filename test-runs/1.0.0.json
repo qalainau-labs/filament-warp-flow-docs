@@ -3,7 +3,7 @@
     "tested_on": "2026-11-11",
     "combinations": 42,
     "passed": 42,
-    "tests": 240,
+    "tests": 241,
     "php": [
         "8.3",
         "8.4",
