@@ -229,6 +229,46 @@ A flow is drawn from top to bottom: steps one under another, and **conditions** 
 
 **After a return**, a resubmitted request either resumes at the step that returned it (default) or starts again from the first step — a setting on the flow.
 
+### Starting from a template
+
+A new flow does not have to start empty. On **New approval flow**, **Start from** offers templates next to *An empty flow*; the one you choose fills the draft with steps, and the editor opens on them. On a flow that is still empty, **Start from a template** in the editor does the same (and *Undo* empties it again).
+
+| Template | Steps |
+| --- | --- |
+| **Manager approval** | The applicant’s manager. |
+| **Manager, then the manager’s manager** | Two steps. For an applicant with nobody two levels up (a director), the second step is skipped. |
+| **Every manager up to the top** | One step per manager, from the applicant’s manager to the top. |
+| **Branch on the amount** | The manager; when the amount is 100,000 or more, the manager’s manager too. |
+| **Purchasing** | The manager; when the amount is 1,000,000 or more, every manager above in turn; then the head of the applicant’s department is informed (a for-information step). |
+
+The templates only use approvers that are relative to the applicant, so they work with any organization. The two that branch on an amount are offered when the records chosen under **Used for** have a number field (`ConditionField::number()`, or a *Number* field of a request form); the branch uses the first one, and its name and the amounts are yours to change in the editor. A template gives you a **draft**: check each step, then press **Publish**.
+
+Add your own templates on the plugin. The steps are the nodes of the flow’s graph, without ids:
+
+```php
+FilamentWarpFlowPlugin::make()
+    ->flowTemplate('contract', 'Contract review', [
+        ['kind' => 'approval', 'name' => 'Legal', 'approvers' => [['type' => 'custom', 'key' => 'legal']]],
+        ['kind' => 'approval', 'name' => 'Manager', 'approvers' => [['type' => 'manager']], 'due_days' => 2],
+        ['type' => 'condition', 'name' => 'Value', 'branches' => [
+            ['name' => 'Over 10M', 'when' => ['match' => 'all', 'rules' => [['field' => 'amount', 'op' => '>', 'value' => 10000000]]], 'steps' => [
+                ['kind' => 'approval', 'name' => 'Board', 'approvers' => [['type' => 'manager_chain']], 'if_empty' => 'skip'],
+            ]],
+            ['name' => 'Otherwise', 'steps' => []],
+        ]],
+    ], 'Legal first, then the manager; the board above ¥10M')
+    ->builtInFlowTemplates(false);   // only your own templates
+```
+
+| Argument | |
+| --- | --- |
+| `$key` | A name for the template, unique among the templates. A key that is also a built-in key (`manager`, `two_levels`, `chain`, `amount`, `purchase`) replaces that template. |
+| `$label` | The name in the list. A string, or a closure called when it is shown (for `__()` in the user’s language). |
+| `$steps` | An array of nodes, or a closure that returns one; the closure can take `$model` (the model class or the request form’s type chosen under *Used for*). A step node takes the keys of a step (`kind`, `name`, `approvers`, `mode`, `due_days`, `if_empty`…; see [Approvers](#approvers) for `approvers`); what you leave out gets the editor’s defaults. A node with `'type' => 'condition'` has `branches`, each with a `name`, a `when` (leave it out for *Otherwise*) and its own `steps`. |
+| `$description` | Optional. Shown under the name. A string or a closure. |
+
+Ids are assigned each time a template is used, so one template can start any number of flows. The template key that comes from the browser is checked against the templates offered for that flow’s records; anything else is refused.
+
 ### The route simulator
 
 Press **Simulate**, pick an applicant (and their department) and fill in the record’s fields. The route is drawn on the flow — the branch taken in green, the people on each step, skipped steps faded — and listed on the right. It follows the draft you are editing and redraws after each change. Nothing is saved.
@@ -258,7 +298,7 @@ On each step:
 - **Skip people who already approved** (on by default) — someone who approved an earlier step of the same request is not asked again.
 - **If nobody is found** — stop the submission with an error, or skip the step. See [When nobody is found](#when-nobody-is-found).
 - **Can return the request** — whether approvers of this step may return it.
-- **Due within** and **Pass to the manager when overdue** — see [Due times and escalation](#due-times-and-escalation).
+- **Due within**, **Remind before the due time**, **When the due time passes** and **Repeat the reminder every** — see [Due times and escalation](#due-times-and-escalation).
 
 ### When nobody is found
 
@@ -353,6 +393,60 @@ public function approvalSnapshot(): array
 }
 ```
 
+## Adding an approver, reassigning a step
+
+Two things change who handles the **current** step of a request that is already running. Both are on the request page, and both are written into the request’s history.
+
+### Add an approver (“have this person look at it too”)
+
+The approver whose turn it is — or their delegate — presses **Add an approver**, picks a person and says why. That person joins the same step and is notified at once.
+
+- The step keeps its rule. With *Everyone*, the request moves on only when the added person has approved as well; with *Any one of them*, their approval (or yours) is enough; with *A number of them*, theirs can be one of the approvals needed. The dialog says which applies.
+- The added person gets the same due time as the person who added them, can open the request, and is shown on the route as “added by …”. They can approve, return or reject like any approver of the step.
+- Who can be added: anyone who can be picked in the panel (in a tenant panel, the tenant’s people) — but not the applicant, and not someone already on the step.
+- It works on approval and consultation steps. The addition belongs to this round of the step: if the request is returned and resubmitted, the step is worked out from the flow again.
+
+Everyone whose turn it is can do this by default. Switch it off, or decide per person and request:
+
+```php
+FilamentWarpFlowPlugin::make()
+    ->addApprovers(false)                                                       // nobody can add approvers
+    ->addApprovers(fn (User $user, Instance $instance) => $user->isManager())   // or decide yourself
+```
+
+### Reassign a stuck step
+
+When a request waits on someone who cannot answer — they left the company, are on long leave — a flow administrator presses **Reassign**, chooses whose step to take (the people the current step still waits on), who gets it instead, and writes the reason (required).
+
+- The first person’s task is cancelled and they are told; the new person gets the task with a **new due time**, counted from now.
+- The history records who reassigned the step, from whom to whom, and the reason.
+- The new person cannot be the applicant or someone already on the step, and must be a person who can be picked in the panel (in a tenant panel, one of the tenant’s people).
+- For a whole route that is out of date after a reorganization, use **Recalculate approvers** instead: it works every remaining step out again from today’s organization.
+
+**Who can reassign.** The people `canManage()` allows — the same people who edit flows. Name others with `canReassign()`:
+
+```php
+FilamentWarpFlowPlugin::make()
+    ->canReassign(fn (User $user) => $user->hasRole('approval-admin'))
+```
+
+The button is on the request page, so the person also has to be able to open the request: give administrators `canViewAllRequests()` if they should reach requests they are not part of. The permission is checked again when the step is reassigned, not only when the button is drawn, and the task must belong to the request on the page.
+
+On your own record pages, add the two actions next to the others:
+
+```php
+use Qalainau\FilamentWarpFlow\Actions\AddApproverAction;
+use Qalainau\FilamentWarpFlow\Actions\ApprovalActions;
+use Qalainau\FilamentWarpFlow\Actions\ReassignAction;
+
+protected function getHeaderActions(): array
+{
+    return [...ApprovalActions::make(), AddApproverAction::make(), ReassignAction::make()];
+}
+```
+
+From code: `app(Engine::class)->addApprover($task, $approver, $person, 'Please check the budget')` and `->reassign($task, $admin, $person, 'Left the company')`. Both throw a `FlowException` with a message for the user when it is not allowed.
+
 ## Request forms
 
 Not every request needs a model. With request forms, admins build an expense claim, a leave request or a purchase request **in the admin screens**, and everyone files requests with it:
@@ -363,8 +457,8 @@ FilamentWarpFlowPlugin::make()->forms()
 
 This adds *Request forms* under *Approval settings* and *Requests* under *Approvals*.
 
-1. **Build the form.** Under *Request forms*, give it a name, a description (shown above the form — what to attach, for example) and its fields: *Text*, *Long text*, *Number*, *Date*, *Choice* (with its choices), *Checkbox*, *Person* and *Files*, each optionally required and with a hint. Each field has a **key** (`amount`), made from the label, under which its value is stored; keep it when you rename the label.
-2. **Give it a flow.** *Create its flow* opens the editor with a new flow for the form — or choose “Form: Expense claim” as *Used for* on any flow. Number, choice, text, checkbox and person fields can be used in **conditions** (“Amount ≥ 100,000”), in the **simulator**, and person fields as **approvers** (*Person in a record field*).
+1. **Build the form.** Under *Request forms*, give it a name, a description (shown above the form — what to attach, for example) and its fields: *Text*, *Long text*, *Number*, *Date*, *Choice* (with its choices), *Checkbox*, *Person*, *Files* and *Table of rows* (line items with a total — see [below](#rows-and-a-total)), each optionally required and with a hint. Each field has a **key** (`amount`), made from the label, under which its value is stored; keep it when you rename the label.
+2. **Give it a flow.** *Create its flow* opens the editor with a new flow for the form — or choose “Form: Expense claim” as *Used for* on any flow. Number, choice, text, checkbox and person fields — and the **total of a table** — can be used in **conditions** (“Amount ≥ 100,000”), in the **simulator**, and person fields as **approvers** (*Person in a record field*).
 3. **File a request.** Under *Requests* → *New request*, people choose the form, write a subject and fill it in, save, and press *Submit for approval*. They can change it while it is a draft or returned to them; the page shows the stamps and the route once submitted.
 
 Approvers open the request from their inbox as usual; *Open record* shows the filled-in form, read-only. A form with requests cannot be deleted — turn *In use* off to stop new requests. Files go to the attachments disk (`attachmentsDisk()`). Forms and requests are kept per tenant.
@@ -379,6 +473,53 @@ Event::listen(ApprovalApproved::class, function (ApprovalApproved $event) {
 });
 ```
 
+### Rows and a total
+
+A **Table of rows** field puts line items on a form — the lines of an expense claim, the items of a purchase — and adds them up.
+
+1. **Columns.** Give the table its columns: each has a label, a type (*Text*, *Number*, *Date* or *Choice*), a key and can be required. Up to 12 columns.
+2. **Total.** Choose how the rows add up:
+
+   | Total | What is added | For |
+   | --- | --- | --- |
+   | **No total** | Nothing. | A plain list (attendees, serial numbers). |
+   | **Add up one column** | One *Number* column. | Expense lines: date, description, **amount**. |
+   | **Add up one column × another** | Two *Number* columns multiplied per row. | Purchases: item, **quantity × unit price**. The table gets an *Amount* column for each row. |
+
+3. **Fill it in.** On the request, people press **Add a row** and fill in the columns; rows can be dragged into another order and removed. Each row’s amount and the total under the table are shown again when they leave a number field. A required table needs at least one row; a request holds up to 200 rows.
+
+**The total drives the flow.** A table with a total adds a number field to the form — “Items (total)”, stored as `data.<key>_total` — that works like any number field: in a branch (“Items (total) ≥ 100,000 → the director approves too”), in the conditions that pick the flow, in the simulator, and for the *Branch on the amount* and *Purchasing* [templates](#starting-from-a-template), which use the form’s first number field.
+
+Approvers see the rows as a table under the summary of the request, with the total, and on the printout. When a returned request is resubmitted, a changed table and a changed total are marked like any other changed field, with the rows as they were before.
+
+Good to know:
+
+- **The total is worked out on the server** every time the request is saved, from the rows that were saved — never from what the browser sent. Rows keep only the columns the form defines; values in number columns that are not numbers count as nothing.
+- In code, the rows are `$entry->data['items']` (a list of arrays keyed by the column keys, plus `_amount` per row when the table has a total) and the total is `$entry->data['items_total']`. Creating a `FormEntry` from code works the same way: give the rows, the total is filled in.
+- A field key cannot end in `_total`, so it can never collide with a table’s total.
+- Amounts are rounded to two decimals. There is one total per table; for a second total, add a second table.
+- If you later change which columns a table adds up, existing requests get the new total the next time they are saved; requests already submitted keep the route they were given.
+
+```php
+// A purchase form with rows, made in a seeder
+$form = Form::create(['name' => 'Purchase', 'fields' => [
+    ['key' => 'items', 'label' => 'Items', 'type' => 'table', 'required' => true,
+        'columns' => [
+            ['key' => 'item', 'label' => 'Item', 'type' => 'text', 'required' => true],
+            ['key' => 'quantity', 'label' => 'Quantity', 'type' => 'number', 'required' => true],
+            ['key' => 'unit_price', 'label' => 'Unit price', 'type' => 'number', 'required' => true],
+        ],
+        'total_mode' => 'product', 'total_a' => 'quantity', 'total_b' => 'unit_price',   // or 'sum' with total_a, or 'none'
+    ],
+]]);
+
+// in the flow's graph: the director approves from 100,000
+['type' => 'condition', 'name' => 'Total', 'branches' => [
+    ['name' => '100,000 or more', 'when' => ['match' => 'all', 'rules' => [['field' => 'data.items_total', 'op' => '>=', 'value' => 100000]]], 'steps' => [/* … */]],
+    ['name' => 'Otherwise', 'steps' => []],
+]],
+```
+
 ## The pages
 
 | Page | |
@@ -388,12 +529,99 @@ Event::listen(ApprovalApproved::class, function (ApprovalApproved $event) {
 | **Delegations** | Let someone approve for you for a period, for every flow or one flow. |
 | **Out of office** | Periods when people are away; their approvals go to their manager (see [Out of office](#out-of-office)). |
 | **Request** | One request: its summary, the approval stamps (with a key to what the blue, red and grey circles mean), the route with each person’s result and due time, and the thread. The actions you can take now are in the header. **Print / PDF** opens it as an A4 approval record. |
+| **All requests** | For auditors and accounting: every request, with filters and a CSV export (see [All requests](#all-requests)). Only for the people `canViewAllRequests()` allows. |
 | **Approval analytics** | For managers and auditors (see below). |
 | **Org chart** | See [The org chart](#the-org-chart). |
 
 ![A request](https://raw.githubusercontent.com/qalainau-labs/filament-warp-flow-docs/main/art/request.png)
 
 The thread takes comments with **@mentions** (type `@` and a name) and attachments. People mentioned are notified and can open the request even if they are not on its route. The request page reloads every 30 seconds, so a step someone else just finished does not keep its buttons.
+
+### Request numbers
+
+Requests have no number unless you ask for one. With `requestNumber()`, every new request gets a number when it is submitted:
+
+```php
+FilamentWarpFlowPlugin::make()
+    ->requestNumber()                                        // 2026-00042, starting again at 1 each year
+    ->requestNumber('REQ-{Y}-{seq:5}')                       // REQ-2026-00042
+    ->requestNumber('{flow}-{y}{m}-{seq:3}', perFlow: true)  // expense-2611-007: per flow, starting again each month
+    ->requestNumber('R{seq:6}')                              // R000042, never starting again
+    ->requestNumber(fn (Instance $instance, int $sequence, CarbonImmutable $date) => 'D'.$instance->unit_id.'-'.$sequence, reset: 'never')
+```
+
+| Argument | |
+| --- | --- |
+| `$format` | A string of text and placeholders: `{Y}` (four-digit year), `{y}` (two digits), `{m}`, `{d}`, `{seq}` (the running number), `{seq:5}` (padded with zeros to five digits) and `{flow}` (the flow’s key, or its id when it has none). Or a closure that receives `instance`, `sequence` and `date` by name and returns the number. Default `{Y}-{seq:5}`. |
+| `$reset` | When the running number starts again at 1: `'never'`, `'year'`, `'month'` or `'day'`. Left out, it follows the format: daily with `{d}`, monthly with `{m}`, yearly with `{Y}` or `{y}`, otherwise never (a closure: yearly). |
+| `$perFlow` | `true` gives each flow its own running number. Put `{flow}` in the format, or two flows will hand out the same number. |
+
+The number is stored in `number` on the request (`$record->approval->number`) and shown on the request page, in the inbox, *My requests*, *All requests*, the dashboard lists and the printout; the lists find a request by it.
+
+Good to know:
+
+- **A request keeps its number** when it is returned and resubmitted. A record submitted again after a rejection or a withdrawal is a new request with the next number.
+- **No number is given twice.** The running number lives in one row per tenant and period (`warp_flow_counters`, indexed by tenant like the other tables) that is locked while a request is submitted, so two people submitting at the same moment get two numbers, and a submission that fails gives its number back. Numbers of deleted requests are not reused.
+- Each tenant has its own running numbers. The year, month and day are those of the app’s time zone.
+- Requests submitted before you turned numbering on have no number; lists show “—”, the printout shows the id.
+- The number is at most 64 characters. Make sure the format contains what the reset needs — `{seq:5}` alone with a yearly reset repeats `00001` every year.
+
+### All requests
+
+**All requests** lists every request — also the ones the viewer has nothing to do with — with its number, subject, flow, applicant and department, status, the step and the people it waits on, and when it was submitted and closed. It is meant for audits and accounting.
+
+- **Filters**: status, flow, applicant, department, the day of submission (from – until, in the panel’s time zone) and *Overdue now*. The search box looks in the subject and the number. Filters are kept in the URL, so a filtered list can be bookmarked or sent to a colleague (who needs the same permission).
+- **Export CSV** saves exactly the requests listed — the same filters, search and order — as a UTF-8 file that Excel opens directly: number, subject, flow, applicant, department, status, step, waiting on, submitted, closed and how often it was submitted. Values that a spreadsheet would run as a formula (starting with `=`, `+`, `-` or `@`) get a leading `'`. One file holds at most 50,000 requests; narrow the list by period for more.
+- A row opens the request.
+
+**Who can open it.** Only the people `canViewAllRequests()` allows:
+
+```php
+FilamentWarpFlowPlugin::make()
+    ->canViewAllRequests(fn (User $user) => $user->hasRole('auditor'))
+```
+
+Without `canViewAllRequests()` nobody can open the page, and it is not in the menu. Being allowed to manage flows (`canManage()`) is **not** enough: the list shows the content of every request, which a flow administrator has no reason to read. The page checks the permission again when it exports. In a tenant panel the list and the file hold the current tenant’s requests only. `->allRequests(false)` removes the page from the panel.
+
+### Dashboard widgets
+
+Three widgets put approvals on the panel’s dashboard, so people see what waits for them without opening the inbox:
+
+| Widget | |
+| --- | --- |
+| `ApprovalStats` | Three numbers: **Waiting for your approval**, **Overdue** (waiting for you and past the due time) and **Returned to you** (your own requests to fix and resubmit). Each one is a link: to the inbox, to the inbox filtered to overdue requests, and to *My requests* filtered to returned ones. |
+| `WaitingApprovals` | The five requests waiting for you with the nearest due time, overdue ones first in red. A row opens the request; **See all** opens the inbox. |
+| `ReturnedRequests` | Your five most recently returned requests, with who returned each one and their comment. |
+
+Turn them on with one option — they are off unless you ask for them:
+
+```php
+FilamentWarpFlowPlugin::make()
+    ->dashboardWidgets()
+```
+
+To choose which ones to show, or to put them on a page of your own, leave `dashboardWidgets()` out and list the classes yourself:
+
+```php
+use Qalainau\FilamentWarpFlow\Widgets\ApprovalStats;
+use Qalainau\FilamentWarpFlow\Widgets\WaitingApprovals;
+
+// in the panel provider
+->widgets([ApprovalStats::class, WaitingApprovals::class])
+
+// or on a page
+protected function getHeaderWidgets(): array
+{
+    return [ApprovalStats::class];
+}
+```
+
+Good to know:
+
+- The widgets count and list **only the signed-in person’s own work**: tasks assigned to them (and to people who delegated to them), and requests they submitted. They use the same numbers as the inbox and *My requests* badges. In a tenant panel they count the current tenant only.
+- They refresh every 60 seconds, and at once when a request is approved or returned on the same page.
+- Set the order among your other widgets by extending a class and changing `protected static ?int $sort` (the defaults are `-3`, `-2` and `-1`, so they come first). Give your own dashboard widgets a `$sort` too: Filament cannot order a widget without one against the others.
+- The inbox and *My requests* now keep their filters in the URL (`?filters[overdue][isActive]=1`), which is how the links above work — and why a reload keeps the filter.
 
 ### Print / PDF
 
@@ -421,8 +649,10 @@ Hide it with `->analytics(false)`.
 | `OpinionAction` | A consultation task. |
 | `AcknowledgeAction` | A for-information or post-review task. |
 | `WithdrawAction` | The applicant, while the request is under way. |
+| `AddApproverAction` | The current user has an approval or consultation task on the current step (see [Adding an approver, reassigning a step](#adding-an-approver-reassigning-a-step)). |
+| `ReassignAction` | The request is in review and the current user is allowed by `canReassign()`. |
 
-`ApprovalActions::make()` returns all of them. They work on any page whose record is approvable, and also take a request (`Instance`) as their record.
+`ApprovalActions::make()` returns the first seven; add `AddApproverAction::make()` and `ReassignAction::make()` yourself where you want them (the request page has both). They work on any page whose record is approvable, and also take a request (`Instance`) as their record.
 
 ![Submitting with a route preview](https://raw.githubusercontent.com/qalainau-labs/filament-warp-flow-docs/main/art/submit.png)
 
@@ -523,12 +753,47 @@ How it works:
 
 ## Due times and escalation
 
-A step’s **Due within** sets a due time on each task, counted in **hours** (calendar hours) or **business days** (at the same time of day: a task that arrives on Friday at 17:00 with *1 business day* is due on Monday at 17:00). The package schedules `warp-flow:check-due` every hour (your app needs the Laravel scheduler running: `* * * * * php artisan schedule:run`). For each overdue approval or consultation task it:
+A step’s **Due within** sets a due time on each task, counted in **hours** (calendar hours) or **business days** (at the same time of day: a task that arrives on Friday at 17:00 with *1 business day* is due on Monday at 17:00). The package schedules `warp-flow:check-due` every hour (your app needs the Laravel scheduler running: `* * * * * php artisan schedule:run`).
 
-- notifies the approver once, and
-- if the step has **Pass to the manager when overdue**, hands the task to the approver’s manager: the original task is cancelled and the manager’s task counts for the same step.
+Three more settings of the step, under **Due time** in the editor, say what happens around that time. All three are empty by default: a step with only a due time reminds the approver once when it is overdue, as before.
 
-Run it by hand with `php artisan warp-flow:check-due`.
+| Setting | What it does |
+| --- | --- |
+| **Remind before the due time** | A number of hours. The approver gets one *Due soon* notification that many hours before the due time (with `emailApproval()`, the email carries the answer link). |
+| **When the due time passes** | What happens to an approval or consultation task nobody answered — see the table below. |
+| **Repeat the reminder every** | A number of hours. After the due time the approver is reminded again at that interval until they answer. Empty: one reminder only. Not offered for steps that approve or reject automatically, which end at the due time. |
+
+**When the due time passes** has four choices:
+
+| Choice | What happens |
+| --- | --- |
+| **Only send a reminder** (default) | The approver is notified once. The request keeps waiting. |
+| **Pass it to the manager** | The task goes to the approver’s manager: the original task is cancelled and the manager’s task counts for the same step. If there is no manager (or the manager is the applicant or already on the step), the approver is reminded instead. |
+| **Approve it automatically** | The task is approved without anyone pressing *Approve*, and the request moves on (or is approved, if this was the last step). Approval steps only. |
+| **Reject it automatically** | The request ends as rejected; the applicant and the approver are told. Approval steps only. |
+
+An automatic approval or rejection is **recorded as automatic**, never as the approver’s own decision: the task has `is_automatic` set and no `acted_by`, the audit log gets an `auto_approved` or `auto_rejected` event without a user, the stamp says *Automatic* instead of the approver’s name, and the route, the printout and the approver’s *Handled* tab say “Approved automatically — nobody answered by the due time”. `ApprovalApproved`, `ApprovalRejected` and `StepCompleted` fire as usual, with `actor` set to `null`.
+
+Good to know:
+
+- **Each task is handled once.** The command locks the request and the task, and marks the task before it acts, so two runs at the same time (or a second run later) cannot approve, reject or hand over the same task twice.
+- With several approvers on a step (*Everyone*), each overdue task is approved on its own; the step is finished when enough of them are in, whether a person or the due time put them there.
+- **Automatic approval lets a request through that nobody read.** Use it for steps where silence means consent (a notice period), and prefer *Pass it to the manager* for real approvals.
+- The check runs hourly, so reminders and automatic decisions happen within the hour after their time, not to the minute. Run it by hand with `php artisan warp-flow:check-due`.
+- A consultation is an opinion, not an approval: it can be reminded or passed to the manager, but is never approved or rejected automatically.
+- Flows saved before these settings keep working: a step with **Pass to the manager when overdue** switched on is read as *Pass it to the manager*.
+
+In code (a seeder or a test), the same settings are keys of the step in the flow’s graph:
+
+```php
+['id' => 'manager', 'type' => 'step', 'kind' => 'approval', 'name' => 'Manager',
+    'approvers' => [['type' => 'manager']],
+    'due_days' => 2,              // or 'due_hours' => 48
+    'remind_before' => 4,         // hours before the due time
+    'overdue_action' => 'escalate', // 'remind' (default), 'escalate', 'approve' or 'reject'
+    'remind_every' => 24,         // hours between reminders after the due time
+],
+```
 
 ### Business days
 
@@ -582,6 +847,7 @@ FilamentWarpFlowPlugin::make()
     ->notifyUsing(function (FlowMessage $message, User $user) {
         // $message->type: assigned, returned_to_you, returned, approved, rejected, withdrawn,
         //                 circulated, post_review, mentioned, commented, overdue, escalated,
+        //                 due_soon, auto_approved, auto_rejected, approver_added, reassigned,
         //                 thread_mentioned, thread_commented (record threads: $message->thread instead of $message->instance)
         Slack::to($user->slack_id)->send($message->title()."\n".$message->url());
     });
@@ -626,8 +892,8 @@ Event::listen(ApprovalApproved::class, function (ApprovalApproved $event) {
 
 ## Who can see and manage what
 
-- A **request** can be opened by the applicant, the people on its route (and their delegates) and the people mentioned in its thread. Nobody else — not even managers — unless you allow it with `canViewAllRequests()`.
-- Only the current step’s approvers (or their delegates) can approve, return or reject; only the applicant can withdraw or resubmit. Two people pressing *Approve* at once cannot both get through: every action locks the request and checks it is still possible.
+- A **request** can be opened by the applicant, the people on its route (and their delegates) and the people mentioned in its thread. Nobody else — not even managers — unless you allow it with `canViewAllRequests()`. The same people, and only they, get the [All requests](#all-requests) list and its CSV export.
+- Only the current step’s approvers (or their delegates) can approve, return or reject — and [add an approver](#adding-an-approver-reassigning-a-step) to their step; only the applicant can withdraw or resubmit. Only the people `canReassign()` allows (by default the ones `canManage()` allows) can reassign a step. Two people pressing *Approve* at once cannot both get through: every action locks the request and checks it is still possible.
 - **The organization and flow screens** are open to the users `canManage()` allows. Without it, everyone who can use the panel can manage them — set it before going live.
 
 ## Plugin options
@@ -637,6 +903,8 @@ FilamentWarpFlowPlugin::make()
     ->models([PurchaseRequest::class, ExpenseClaim::class])   // approvable models (the flow's "Used for" options)
     ->canManage(fn (User $user) => $user->hasRole('admin'))    // organization, flows, others' delegations, recalculate approvers
     ->canViewAllRequests(fn (User $user) => $user->hasRole('auditor'))
+    ->addApprovers(false)                                       // approvers cannot add people to their step (default: they can)
+    ->canReassign(fn (User $user) => $user->hasRole('admin'))   // who can reassign a stuck step (default: canManage())
     ->threads()                                                 // the Threads page (see Record threads)
     ->canViewThread(fn (Model $record, User $user) => ...)      // who can read and write a record thread
     ->approverResolver('finance', 'Finance team', fn (Model $record, ?Model $applicant, ?int $unit) => User::role('finance')->get())
@@ -648,6 +916,9 @@ FilamentWarpFlowPlugin::make()
     ->userSearchColumns(['name', 'email', 'employee_number'])   // where user pickers and @mentions search
     ->scopeUsersUsing(fn (Builder $query, string $tenantKey) => ...)   // limit user pickers to the tenant's people (see Multi-tenancy)
     ->forms()                                                   // request forms (see Request forms)
+    ->dashboardWidgets()                                        // approval widgets on the dashboard (see Dashboard widgets)
+    ->requestNumber('REQ-{Y}-{seq:5}')                          // number every request (see Request numbers)
+    ->flowTemplate('contract', 'Contract review', [...])        // your own flow templates (see Starting from a template)
     ->emailApproval(days: 7)                                    // answer from the email (see Answering from the email)
     ->businessCalendar(BusinessCalendar::make()->japaneseHolidays())   // due times in business days
     ->isAbsentUsing(fn (User $user, CarbonImmutable $at) => ...)       // who is away, from your own data
@@ -658,7 +929,8 @@ FilamentWarpFlowPlugin::make()
     ->organization(false)                                       // hide the department, position, member and org chart screens
     ->delegations(false)                                        // hide the delegations page
     ->absences(false)                                           // hide the out of office page
-    ->analytics(false);                                         // hide the approval analytics page
+    ->analytics(false)                                          // hide the approval analytics page
+    ->allRequests(false);                                       // hide the All requests page
 ```
 
 A custom approver resolver receives `record`, `applicant` and `unit` by name and returns users or user keys. It appears in the editor as *Custom* approvers.
@@ -894,7 +1166,7 @@ it('is approved by the manager', function () {
 
 - PHP 8.3+
 - Laravel 12 or 13
-- Filament 5
+- Filament 5.8.3 or later
 - SQLite, MySQL 8.0+, MariaDB 10.11+ or PostgreSQL 14+
 
 The interface is translated into English, Japanese, German, French, Spanish, Italian, Brazilian Portuguese, Korean and Chinese (simplified and traditional). Each follows the app’s locale (`App::setLocale()`).

@@ -5,6 +5,36 @@ All notable changes to `qalainau/filament-warp-flow` will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.1.0] - 2026-11-12
+
+### Added
+
+- Dashboard widgets: requests waiting for you, overdue tasks, and your own requests that were returned. Turn them on with `->dashboardWidgets()`. The inbox and *My requests* filters are now kept in the URL, so a widget can link to a filtered list.
+- Reminders before a task is due, repeated reminders after it is overdue, and an automatic decision when it is overdue. A step's `remind_before`, `remind_every` and `overdue_action` (`remind`, `escalate`, `approve` or `reject`) are set in the flow editor. An automatic decision is marked as such on the request and in the history. Runs from the hourly `warp-flow:check-due`.
+- Flow templates to start from: manager approval, manager then their manager, managers in turn, branch by amount, and purchasing. Shown on the create page and in an empty flow editor. Add your own with `->flowTemplate()`, hide the built-in ones with `->builtInFlowTemplates(false)`.
+- Request numbers: `->requestNumber('REQ-{Y}-{seq:5}')`, with the period the sequence restarts in and an optional sequence per flow. Numbers are counted per tenant and never repeat, even when two people submit at the same moment.
+- An *All requests* page for auditors and accounting, with filters and a CSV export (values that a spreadsheet would run as a formula are made harmless). Only for the people `canViewAllRequests()` allows, per tenant. Remove it with `->allRequests(false)`.
+- Adding an approver part-way (“have this person look at it too”) with `AddApproverAction` and `->addApprovers()`, and reassigning a waiting step to someone else with `ReassignAction` and `->canReassign()`. Permissions and the tenant are checked again when the action runs.
+- Line items in request forms: a `table` field with text, number, date and select columns, and a total (the sum of one column, or quantity × unit price). The total is calculated on the server on every save and is available to flow conditions as `data.<key>_total`. The request page and the print view show the table.
+
+### Changed
+
+- Now requires Filament 5.8.3 or later (was 5.0). Older 5.x versions have known security advisories (Composer 2.9 and later refuses to install them), and the plugin cannot be tested on them. The tests now also run on the lowest supported versions before each release.
+- The request page explains what you can do when it is not your turn, and the amount column of line items no longer looks editable.
+- Clearer wording in all languages, using the same names as the screens (approval route, conversation, flow, step).
+
+### Fixed
+
+- On PostgreSQL, a person key that is not a number (or not a UUID, for UUID keys) sent from the browser ended in a database error instead of “That person cannot be chosen here.” Such keys are now dropped before the users are looked up.
+- Submitting no longer loads each flow's published version one by one, which failed in apps that turn on `Model::preventLazyLoading()` when there were two or more flows.
+- On MariaDB 11 with Filament tenancy, loading the published version of several flows at once returned none: the flow list showed every flow as unpublished. The published version is now loaded in a way that works on every database.
+
+### Upgrading
+
+- Run `php artisan migrate`. The new columns and the counters table are in a new migration (`extend_warp_flow_tables_with_numbers_and_reminders`); the 1.0.0 migration is unchanged. If you published the 1.0.0 migrations, the new one still runs from the package.
+
 ## [1.0.0] - 2026-11-11
 
 ### Added
@@ -37,3 +67,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hanko-style stamps with a key under them (whose turn it is, overdue, later, stamped; red for approved or agreed, black for rejected, orange for returned), smaller on phones.
 - An approval step whose approvers resolve to nobody stops the submission with an error by default (**If nobody is found**); a step skipped on purpose is marked with a warning on the request page, in the route, on the timeline and in the route simulator.
 - `navigationGroup()`, `settingsNavigationGroup()` and the label of `approverResolver()` accept a closure, called when the label is shown, so it follows the user's language.
+- Reminders and automatic handling of overdue steps. A step can remind its approver a number of hours **before the due time**, **repeat the reminder** every N hours after it, and choose what happens **when the due time passes**: only remind (the default, as before), pass it to the manager, **approve it automatically** or **reject it automatically**. An automatic decision is recorded as automatic — no `acted_by`, `is_automatic` on the task, `auto_approved` / `auto_rejected` in the audit log, “Automatic” on the stamp — and each task is handled once, however often `warp-flow:check-due` runs. New notifications `due_soon`, `auto_approved` and `auto_rejected`. New columns `due_soon_at`, `reminded_at`, `reminders` and `is_automatic` on `warp_flow_tasks`.
+- Flow templates: a new flow can start from *Manager approval*, *Manager, then the manager’s manager*, *Every manager up to the top*, *Branch on the amount* or *Purchasing* instead of empty — chosen under **Start from** when creating a flow, or with **Start from a template** in the editor of an empty flow. The templates that branch on an amount are offered when the records have a number field. `flowTemplate()` adds your own; `builtInFlowTemplates(false)` hides the bundled ones.
+- Request numbers (`requestNumber()`): every new request gets a number such as `REQ-2026-00042` from a format of your choice (`{Y}`, `{y}`, `{m}`, `{d}`, `{seq}`, `{seq:5}`, `{flow}`, or a closure), starting again each year, month or day, per tenant and optionally per flow. No number is given twice, even when two people submit at once. Shown on the request, in the lists and on the printout; the lists find a request by it. New column `number` on `warp_flow_instances` and table `warp_flow_counters`.
+- All requests: a page for auditors and accounting that lists every request with filters (status, flow, applicant, department, day of submission, overdue now) and exports the listed requests as CSV (UTF-8 for Excel, formulas made harmless). Only for the people `canViewAllRequests()` allows — managing flows is not enough — and per tenant. `allRequests(false)` hides it.
+- Add an approver: the approver whose turn it is can add a person to their step from the request page (“have this person look at it too”). The step keeps its rule, so with *Everyone* the added person has to approve as well. `AddApproverAction`, `addApprovers()` to switch it off or decide per person, notification `approver_added`. New column `added_by` on `warp_flow_tasks`.
+- Reassign a stuck step: a flow administrator hands the step of someone who cannot answer to another person, with a required reason, a new due time and a line in the history. `ReassignAction`, `canReassign()` (default: the people `canManage()` allows), notification `reassigned` to the person the step was taken from. Neither action accepts the applicant, a person outside the tenant or a task of another request.
+- Request forms: a **Table of rows** field for line items — columns of text, number, date or choice, rows added on the request — with a total (one number column added up, or quantity × unit price per row). The total is a number field of the form (`data.<key>_total`), so a flow can branch on it (“total ≥ 100,000 → the director approves too”); it is worked out on the server at every save. Approvers see the rows and the total on the request and the printout, and what changed in them after a return.
+- Dashboard widgets (`dashboardWidgets()`): `ApprovalStats` shows what waits for your approval, how much of it is overdue and how many of your own requests were returned, each number linking to its list; `WaitingApprovals` lists the five requests waiting for you with the nearest due time; `ReturnedRequests` lists your returned requests with who returned them and why. They count the signed-in person’s own work only, per tenant. The inbox and *My requests* keep their filters in the URL.
