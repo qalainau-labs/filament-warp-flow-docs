@@ -5,7 +5,11 @@ All notable changes to `qalainau/filament-warp-flow` will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.1] - 2026-11-13
+
+### Security
+
+- The request page, its thread and a record's thread check on every request that the person may see them, not only when the page opens. A Livewire request after the first one does not run `mount()`, so someone who got hold of another person's page state could see a request they may not see.
 
 ## [1.1.0] - 2026-11-12
 
