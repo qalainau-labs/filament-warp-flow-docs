@@ -29,6 +29,7 @@ Submit a purchase request, switch to the manager to return it with a question, a
 - [Answering from the email](#answering-from-the-email)
 - [Events](#events)
 - [Who can see and manage what](#who-can-see-and-manage-what)
+  - [Restricting pages per role](#restricting-pages-per-role)
 - [Plugin options](#plugin-options)
 - [Using your own organization data](#using-your-own-organization-data)
 - [Using the engine from code](#using-the-engine-from-code)
@@ -895,6 +896,64 @@ Event::listen(ApprovalApproved::class, function (ApprovalApproved $event) {
 - A **request** can be opened by the applicant, the people on its route (and their delegates) and the people mentioned in its thread. Nobody else — not even managers — unless you allow it with `canViewAllRequests()`. The same people, and only they, get the [All requests](#all-requests) list and its CSV export.
 - Only the current step’s approvers (or their delegates) can approve, return or reject — and [add an approver](#adding-an-approver-reassigning-a-step) to their step; only the applicant can withdraw or resubmit. Only the people `canReassign()` allows (by default the ones `canManage()` allows) can reassign a step. Two people pressing *Approve* at once cannot both get through: every action locks the request and checks it is still possible.
 - **The organization and flow screens** are open to the users `canManage()` allows. Without it, everyone who can use the panel can manage them — set it before going live.
+
+### Restricting pages per role
+
+When your app has its own roles — “this role cannot use the inbox”, “this role may look at delegations but not change them” — tell the plugin per page who may **open** it and who may **write** on it (everyone else only looks):
+
+```php
+use Qalainau\FilamentWarpFlow\FilamentWarpFlowPlugin;
+use Qalainau\FilamentWarpFlow\Pages\MyTasks;
+use Qalainau\FilamentWarpFlow\Pages\ViewApproval;
+
+FilamentWarpFlowPlugin::make()
+    ->canAccessUsing(fn (User $user, string $page): bool => $user->canOpen($page))
+    ->canWriteUsing(fn (User $user, string $page): bool => ! $user->isReadOnlyOn($page))
+```
+
+For example, viewers read their inbox and the request page but cannot approve, and interns do not see the inbox at all:
+
+```php
+FilamentWarpFlowPlugin::make()
+    ->canAccessUsing(fn (User $user, string $page): bool => ! ($user->hasRole('intern') && $page === MyTasks::class))
+    ->canWriteUsing(fn (User $user, string $page): bool => ! ($user->hasRole('viewer') && in_array($page, [MyTasks::class, ViewApproval::class], true)))
+```
+
+Both closures receive the signed-in `$user` and the `$page` class by name. `$page` is one of:
+
+| `$page` | Page |
+| --- | --- |
+| `Pages\MyTasks` | Inbox |
+| `Pages\MyRequests` | My requests |
+| `Pages\MyThreads` | Threads (with `->threads()`) |
+| `Pages\Delegations` | Delegations |
+| `Pages\Absences` | Out of office |
+| `Pages\AllRequests` | All requests |
+| `Pages\ViewApproval` | The request page (and its print view and thread) |
+| `Pages\OrgChart` | Org chart |
+| `Pages\Analytics` | Approval analytics |
+| `Widgets\ApprovalStats`, `Widgets\WaitingApprovals`, `Widgets\ReturnedRequests` | The dashboard widgets |
+
+**`canAccessUsing()` — who may open a page.** When it returns `false` the page is gone from the menu, its URL answers 403, and any click on a page that is already open (a Livewire request) answers 403 too. For `ViewApproval` this also closes the print view and the request’s thread, and removes the links to the request from the inbox, *My requests*, *All requests*, the widgets, the analytics page and record threads. Links from widgets to the inbox and *My requests* disappear for people who cannot open those pages. For a widget, `false` hides the widget.
+
+**`canWriteUsing()` — who may change things on a page.** When it returns `false` the page still opens, but read only:
+
+- *Inbox*: no **Approve selected**.
+- *Request page*: no **Approve**, **Return**, **Reject**, **Give opinion**, **Mark as read** (on a circulation step — it records that the person has seen the request), **Withdraw**, **Resubmit**, **Add an approver**, **Reassign** or **Recalculate approvers**, and the thread shows the conversation without the box to write in. Posting anyway answers 403.
+- *Delegations* and *Out of office*: no **New delegation** / **I will be away**, **Edit** or **Delete**.
+
+Hidden actions cannot be called from the browser either. What only reads stays available: opening a request, **Print**, **Open record**, filters and search, the CSV export on *All requests*, and the analytics and org chart pages (which have nothing to write). Keeping track of what the person has read (opening a request marks it read; **Mark as read** and **Unfollow** on *Threads*) is their own reading state, not a change to the data, and stays available.
+
+Good to know:
+
+- The rules are added to the plugin’s own ones (`canManage()`, `canViewAllRequests()`, `canViewOrgChart()`, who is on a request…). They can only take access away: returning `true` does not open *All requests* to someone `canViewAllRequests()` does not allow.
+- A person can write only on a page they can open.
+- Once you set either closure, people who are not signed in get `false`.
+- Without the closures, nothing changes.
+- The organization and flow screens (*Departments*, *Positions*, *Members*, *Flows* and the flow editor, *Request forms*, *Form entries*) are resources: control them with `canManage()` and your policies, not with these closures.
+- The approval buttons you put on your own record pages (`ApprovalActions::make()`) and the email answer links are not plugin pages; these closures do not affect them.
+
+**Your own policies count too.** When your app has a policy for a model of this plugin, Warp Flow also asks it, together with its own rules — so a role that may not use a screen gets a 403 there too. A request (`FormEntryResource`) opens only when the policy allows `view`, can be changed only with `update` and deleted only with `delete`; the settings for forms, units, positions, assignments and flows (`FormResource`, `UnitResource`, `PositionResource`, `AssignmentResource`, `DefinitionResource`) also ask `viewAny`. Without a policy nothing changes (also with Filament's `strictAuthorization()`).
 
 ## Plugin options
 

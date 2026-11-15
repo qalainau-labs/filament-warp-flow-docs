@@ -5,6 +5,13 @@ All notable changes to `qalainau/filament-warp-flow` will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-11-15
+
+### Added
+
+- Requests and the settings for forms, units, positions, assignments and flows also ask your app's policy when you have one for the model: a request opens with `view`, is changed with `update` and deleted with `delete`; the settings ask `viewAny`. Without a policy nothing changes.
+- `canAccessUsing()` and `canWriteUsing()` on the plugin: your app decides per page who may open the inbox, the request page, delegations and the other Warp Flow pages and widgets, and who only looks (no approving, returning, posting in the thread, or changing delegations and absences). See “Restricting pages per role” in the README.
+
 ## [1.1.1] - 2026-11-13
 
 ### Security
