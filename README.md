@@ -534,6 +534,8 @@ $form = Form::create(['name' => 'Purchase', 'fields' => [
 | **Approval analytics** | For managers and auditors (see below). |
 | **Org chart** | See [The org chart](#the-org-chart). |
 
+Dates and times on these pages, and “today” on the org chart, follow the panel's time zone (`FilamentTimezone::get()`, or the app's `timezone`).
+
 ![A request](https://raw.githubusercontent.com/qalainau-labs/filament-warp-flow-docs/main/art/request.png)
 
 The thread takes comments with **@mentions** (type `@` and a name) and attachments. People mentioned are notified and can open the request even if they are not on its route. The request page reloads every 30 seconds, so a step someone else just finished does not keep its buttons.
@@ -953,7 +955,26 @@ Good to know:
 - The organization and flow screens (*Departments*, *Positions*, *Members*, *Flows* and the flow editor, *Request forms*, *Form entries*) are resources: control them with `canManage()` and your policies, not with these closures.
 - The approval buttons you put on your own record pages (`ApprovalActions::make()`) and the email answer links are not plugin pages; these closures do not affect them.
 
-**Your own policies count too.** When your app has a policy for a model of this plugin, Warp Flow also asks it, together with its own rules — so a role that may not use a screen gets a 403 there too. A request (`FormEntryResource`) opens only when the policy allows `view`, can be changed only with `update` and deleted only with `delete`; the settings for forms, units, positions, assignments and flows (`FormResource`, `UnitResource`, `PositionResource`, `AssignmentResource`, `DefinitionResource`) also ask `viewAny`. Without a policy nothing changes (also with Filament's `strictAuthorization()`).
+**Your own policies count too.** When your app has a policy for a model of this plugin, Warp Flow also asks it, together with its own rules — so a role that may not use a screen gets a 403 there too. A request (`FormEntryResource`) opens only when the policy allows `view`, can be changed only with `update` and deleted only with `delete`; the settings for forms, units, positions, assignments and flows (`FormResource`, `UnitResource`, `PositionResource`, `AssignmentResource`, `DefinitionResource`) also ask `viewAny`. Editing a flow in the flow editor also requires `update` for that flow, including saving and publishing drafts. Without a policy nothing changes (also with Filament's `strictAuthorization()`).
+
+### Replacing a standard page
+
+Every page of the plugin can be left out or replaced with your own subclass. The URL and route name stay the same, and the links, permission checks and notification links inside the plugin use your class.
+
+```php
+FilamentWarpFlowPlugin::make()
+    ->viewApprovalPage(App\Filament\Pages\ApprovalDetail::class)  // must extend Pages\ViewApproval
+    ->myTasksPage(App\Filament\Pages\Inbox::class)                 // must extend Pages\MyTasks
+    ->orgChartPage(false)                                           // leave the org chart page out
+```
+
+| Method | Extends |
+| --- | --- |
+| `myTasksPage()`, `myRequestsPage()`, `myThreadsPage()` | `Pages\MyTasks`, `Pages\MyRequests`, `Pages\MyThreads` |
+| `delegationsPage()`, `absencesPage()`, `allRequestsPage()` | `Pages\Delegations`, `Pages\Absences`, `Pages\AllRequests` |
+| `viewApprovalPage()`, `orgChartPage()`, `analyticsPage()` | `Pages\ViewApproval`, `Pages\OrgChart`, `Pages\Analytics` |
+
+Pass `true` for the standard page, `false` to leave it out, or a class name. A class that does not extend the standard page throws an `InvalidArgumentException`. `false` also works like the existing `delegations(false)`, `absences(false)`, `allRequests(false)` and `analytics(false)`. Keep the `$slug` of the standard page (it is inherited unless you override it): the request page must stay at `approvals/{instance}` for the links in emails.
 
 ## Plugin options
 
@@ -1135,6 +1156,10 @@ By default Warp Flow asks your user model `canAccessTenant($tenant)` for each ca
 The bundled migration already has what is needed: nullable `tenant_type` and `tenant_id` strings on `warp_flow_units`, `positions`, `assignments`, `definitions`, `instances`, `delegations` and `threads`, indexed together with the column each list is filtered or sorted by. `tenant_type` is the tenant model’s morph class (`$tenant->getMorphClass()`), so two panels with different tenant models (`Team` and `Company`) never mix their rows, even when the IDs are the same. `tenant_id` is the tenant’s key (`$tenant->getKey()`), not its slug; integer, UUID and ULID keys all fit (every column that holds a user key is a string too, so UUID and ULID users work). The other tables (versions, tasks, comments, reads, events, thread comments and followers) follow their flow, request or thread through a foreign key. Rows without a tenant have both columns empty.
 
 The database keeps a flow key unique per tenant (`tenant_type`, `tenant_id`, `key`). For rows without a tenant, where both columns are empty, the flow form checks it, because databases do not treat two empty values as the same.
+
+### Several panels with Warp Flow
+
+Settings you write on `FilamentWarpFlowPlugin` belong to that panel. Outside any panel (the scheduler, queued jobs, commands) there is no current panel, so Warp Flow borrows the settings of the default panel that has the plugin, or else the first one. If your panels use different user models or rules, set what must be the same everywhere once, outside the panels (for example in a service provider): `WarpFlow::get()->userModel(Employee::class)`. Settings made there are used by every panel that does not set its own.
 
 ### Submitting from jobs, commands and seeders
 

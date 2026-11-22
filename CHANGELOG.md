@@ -5,6 +5,22 @@ All notable changes to `qalainau/filament-warp-flow` will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.3.0] - 2026-11-22
+
+### Added
+
+- **Replace the standard pages**: `->myTasksPage()`, `->myRequestsPage()`, `->myThreadsPage()`, `->delegationsPage()`, `->absencesPage()`, `->allRequestsPage()`, `->viewApprovalPage()`, `->orgChartPage()` and `->analyticsPage()` take `true` (standard), `false` (leave the page out) or a class that extends the standard page. The slug and route name stay the same, and links, permission checks and notifications inside the plugin use your class. Matching getters: `getViewApprovalPage()` and so on.
+
+### Fixed
+
+- The flow editor now also asks your policy's `update` for the flow; someone your policy does not allow to update a flow no longer sees *Editor* and gets a 403, and cannot save or publish a draft.
+- Opening a flow's editor without permission no longer creates an empty draft revision before the page is refused.
+- **Analytics period starts at the start of a day in the panel's time zone**: "last N days" began at midnight UTC, so with the panel set to e.g. America/New_York the period started in the evening of the previous day. It now begins at the start of the day in the panel's time zone.
+- **Dates in the wrong time zone near midnight UTC**: the approval stamps (applied / approved dates), the due dates in the route, the timeline tooltips, the printed record and the “answer from the email” page showed the stored UTC time instead of the panel's time zone (`FilamentTimezone`). The org chart opened on, and “current” assignments were chosen by, the UTC date. All of them now use the panel's time zone.
+- **Page access rules on a replaced page**: when the app replaced a standard page or resource with a subclass (`xxxPage()`/`xxxResource()`), `canAccessUsing()` and `canWriteUsing()` received the subclass as `$page`, so a rule such as `$page !== Projects::class` did not match and a page the app had closed still opened (HTTP 200). `$page` is now always the plugin's own standard class, whatever the app swaps in. A rule that compared `$page` with the app's own subclass must compare with the standard class instead.
+
 ## [1.2.2] - 2026-11-19
 
 ### Fixed
