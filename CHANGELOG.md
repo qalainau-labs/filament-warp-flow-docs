@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-26
+
+### Fixed
+
+- The analytics page's "oldest waiting requests" list now breaks ties on the submitted time by ID, so requests submitted at the same moment no longer swap places or drop out of the top 10 between page loads on PostgreSQL.
+
 ## [1.3.0] - 2026-11-22
 
 ### Added
